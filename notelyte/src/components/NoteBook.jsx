@@ -6,65 +6,165 @@ const ExecutiveNotebook = () => {
     return saved ? JSON.parse(saved) : {};
   });
 
+  // Independent expansion states using Sets
+  const [openNotebooks, setOpenNotebooks] = useState(new Set());
+  const [openSections, setOpenSections] = useState(new Set());
+  
   const [activePagePath, setActivePagePath] = useState(null);
-  const [activeNbId, setActiveNbId] = useState(null);
-  const [activeSecId, setActiveSecId] = useState(null);
-  const [isSaving, setIsSaving] = useState(false);
   const [isPreview, setIsPreview] = useState(false);
-
-  // Unified Input State
-  const [inputTarget, setInputTarget] = useState({ type: null, id: null }); // type: 'nb', 'sec', 'pg'
+  const [contextMenu, setContextMenu] = useState(null); 
+  const [inputTarget, setInputTarget] = useState({ type: null, id: null, mode: 'create', parentNbId: null, parentSecId: null });
   const [tempInput, setTempInput] = useState('');
+  const [clipboard, setClipboard] = useState(null);
 
   useEffect(() => {
-    setIsSaving(true);
     localStorage.setItem('executive-docs', JSON.stringify(notebooks));
-    const timer = setTimeout(() => setIsSaving(false), 800);
-    return () => clearTimeout(timer);
+    const closeMenu = () => setContextMenu(null);
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
   }, [notebooks]);
 
-  // --- LOGIC: CREATE ---
-  const handleCreate = (e, type, parentNbId = null, parentSecId = null) => {
+  // --- TOGGLE LOGIC ---
+  const toggleNotebook = (id) => {
+    const next = new Set(openNotebooks);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setOpenNotebooks(next);
+  };
+
+  const toggleSection = (id) => {
+    const next = new Set(openSections);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setOpenSections(next);
+  };
+
+  // --- CRUD ENGINE ---
+  const handleInputSubmit = (e) => {
     if (e.key !== 'Enter' || !tempInput.trim()) return;
-
-    const id = `ID_${Date.now()}`;
+    const { type, mode, id, parentNbId, parentSecId } = inputTarget;
     const updated = { ...notebooks };
 
-    if (type === 'nb') {
-      updated[id] = { [tempInput]: { sections: {} } };
-    } else if (type === 'sec') {
-      const nbName = Object.keys(updated[parentNbId])[0];
-      updated[parentNbId][nbName].sections[id] = { sectionname: tempInput, pages: {} };
-    } else if (type === 'pg') {
-      const nbName = Object.keys(updated[parentNbId])[0];
-      updated[parentNbId][nbName].sections[parentSecId].pages[id] = { pagename: tempInput, content: "" };
-      setActivePagePath({ nbId: parentNbId, secId: parentSecId, pgId: id });
+    if (mode === 'create') {
+      const newId = `ID_${Date.now()}`;
+      if (type === 'nb') {
+        updated[newId] = { [tempInput]: { sections: {} } };
+        toggleNotebook(newId);
+      } else if (type === 'sec') {
+        const nbKey = Object.keys(updated[parentNbId])[0];
+        updated[parentNbId][nbKey].sections[newId] = { sectionname: tempInput, pages: {} };
+        toggleSection(newId);
+      } else if (type === 'pg') {
+        const nbKey = Object.keys(updated[parentNbId])[0];
+        updated[parentNbId][nbKey].sections[parentSecId].pages[newId] = { pagename: tempInput, content: "" };
+        setActivePagePath({ nbId: parentNbId, secId: parentSecId, pgId: newId });
+      }
+    } else {
+      // Rename Logic
+      if (type === 'nb') {
+        const nbKey = Object.keys(updated[id])[0];
+        const data = updated[id][nbKey];
+        delete updated[id];
+        updated[id] = { [tempInput]: data };
+      } else if (type === 'sec') {
+        const nbKey = Object.keys(updated[parentNbId])[0];
+        updated[parentNbId][nbKey].sections[id].sectionname = tempInput;
+      } else if (type === 'pg') {
+        const nbKey = Object.keys(updated[parentNbId])[0];
+        updated[parentNbId][nbKey].sections[parentSecId].pages[id].pagename = tempInput;
+      }
     }
-
     setNotebooks(updated);
-    setTempInput('');
     setInputTarget({ type: null, id: null });
+    setTempInput('');
   };
 
-  // --- LOGIC: DELETE ---
-  const handleDelete = (e, type, nbId, secId = null, pgId = null) => {
-    e.stopPropagation();
+  const executeDelete = (target) => {
     const updated = { ...notebooks };
-    if (type === 'nb') delete updated[nbId];
-    else if (type === 'sec') delete updated[nbId][Object.keys(updated[nbId])[0]].sections[secId];
-    else if (type === 'pg') delete updated[nbId][Object.keys(updated[nbId])[0]].sections[secId].pages[pgId];
-    
+    const { type, id, parentNbId, parentSecId } = target;
+    if (type === 'nb') delete updated[id];
+    else if (type === 'sec') {
+      const nbKey = Object.keys(updated[parentNbId])[0];
+      delete updated[parentNbId][nbKey].sections[id];
+    } else if (type === 'pg') {
+      const nbKey = Object.keys(updated[parentNbId])[0];
+      delete updated[parentNbId][nbKey].sections[parentSecId].pages[id];
+    }
+    if (activePagePath?.pgId === id) setActivePagePath(null);
     setNotebooks(updated);
-    if (activePagePath?.pgId === pgId) setActivePagePath(null);
   };
+const handleCopy = (menu) => {
+  const updated = { ...notebooks };
 
-  const updateContent = (val) => {
-    if (!activePagePath) return;
-    const { nbId, secId, pgId } = activePagePath;
-    const updated = { ...notebooks };
-    const nbName = Object.keys(updated[nbId])[0];
-    updated[nbId][nbName].sections[secId].pages[pgId].content = val;
+  if (menu.type === "sec") {
+    const nbKey = Object.keys(updated[menu.parentNbId])[0];
+    const section = updated[menu.parentNbId][nbKey].sections[menu.id];
+
+    setClipboard({
+      type: "sec",
+      payload: JSON.parse(JSON.stringify(section)),
+    });
+  }
+
+  if (menu.type === "pg") {
+    const nbKey = Object.keys(updated[menu.parentNbId])[0];
+    const page =
+      updated[menu.parentNbId][nbKey].sections[menu.parentSecId].pages[menu.id];
+
+    setClipboard({
+      type: "pg",
+      payload: JSON.parse(JSON.stringify(page)),
+    });
+  }
+};
+
+const handlePaste = (menu) => {
+  if (!clipboard) return;
+
+  const updated = { ...notebooks };
+  const newId = `COPY_${Date.now()}`;
+
+  // Paste SECTION → NOTEBOOK
+  if (clipboard.type === "sec" && menu.type === "nb") {
+    const nbKey = Object.keys(updated[menu.id])[0];
+
+    updated[menu.id][nbKey].sections[newId] = {
+      ...clipboard.payload,
+      sectionname: clipboard.payload.sectionname + " (Copy)",
+    };
+
     setNotebooks(updated);
+    toggleNotebook(menu.id);
+    return;
+  }
+
+  // Paste PAGE → SECTION
+  if (clipboard.type === "pg" && menu.type === "sec") {
+    const nbKey = Object.keys(updated[menu.parentNbId])[0];
+
+    updated[menu.parentNbId][nbKey].sections[menu.id].pages[newId] = {
+      ...clipboard.payload,
+      pagename: clipboard.payload.pagename + " (Copy)",
+    };
+
+    setNotebooks(updated);
+    toggleSection(menu.id);
+    return;
+  }
+};
+
+
+  const onDrop = (e, target) => {
+    e.preventDefault();
+    const item = JSON.parse(e.dataTransfer.getData("item"));
+    if (item.id === target.id) return;
+    const updated = { ...notebooks };
+    if (item.type === 'pg' && target.type === 'sec') {
+      const srcNbKey = Object.keys(updated[item.parentNbId])[0];
+      const tarNbKey = Object.keys(updated[target.parentNbId])[0];
+      const pageData = updated[item.parentNbId][srcNbKey].sections[item.parentSecId].pages[item.id];
+      delete updated[item.parentNbId][srcNbKey].sections[item.parentSecId].pages[item.id];
+      updated[target.parentNbId][tarNbKey].sections[target.id].pages[item.id] = pageData;
+      setNotebooks(updated);
+    }
   };
 
   const currentPage = activePagePath 
@@ -72,122 +172,87 @@ const ExecutiveNotebook = () => {
     : null;
 
   return (
-    <div className="flex h-screen w-full bg-white text-[#1a1a1a] font-['Plus_Jakarta_Sans'] antialiased p-6 gap-6">
+    <div className="flex h-screen w-full bg-[#fcfcfc] text-[#1a1a1a] font-['Plus_Jakarta_Sans'] p-6 gap-6">
       
       {/* SIDEBAR */}
-      <div className="w-80 bg-[#f9f9f9] border border-[#f1f1f1] rounded-[32px] flex flex-col shrink-0 overflow-hidden shadow-sm">
-        <div className="p-8">
-          <span className="text-[10px] font-extrabold text-[#a1a1aa] uppercase tracking-[0.2em] mb-4 block">Architecture</span>
-          <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-black tracking-tighter uppercase">Dossier</h2>
-            <button 
-              onClick={() => setInputTarget({ type: 'nb', id: 'root' })}
-              className="w-8 h-8 rounded-full border border-black/10 flex items-center justify-center hover:bg-black hover:text-white transition-all"
-            >
-              +
-            </button>
-          </div>
+      <div className="w-80 bg-white border border-[#ececec] rounded-[32px] flex flex-col shadow-sm overflow-hidden">
+        <div className="p-8 flex items-center justify-between border-b bg-gray-50/20">
+          <h2 className="text-xl font-black uppercase italic tracking-tighter">Dossier OS</h2>
+          <button onClick={() => setInputTarget({ type: 'nb', id: 'root', mode: 'create' })} className="w-8 h-8 bg-black text-white rounded-full font-bold shadow-lg hover:scale-110 transition-transform">+</button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 space-y-4 pb-10 custom-scrollbar">
-          {/* Create Notebook Input */}
-          {inputTarget.type === 'nb' && (
-            <input 
-              autoFocus
-              className="w-full bg-white border-2 border-black rounded-xl p-3 text-xs font-bold outline-none"
-              placeholder="NEW NOTEBOOK..."
-              value={tempInput}
-              onChange={(e) => setTempInput(e.target.value)}
-              onKeyDown={(e) => handleCreate(e, 'nb')}
-              onBlur={() => setInputTarget({ type: null, id: null })}
-            />
+        <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
+          {inputTarget.type === 'nb' && inputTarget.mode === 'create' && (
+            <input autoFocus className="w-full p-3 border-2 border-black rounded-xl text-xs font-bold outline-none" placeholder="NOTEBOOK NAME..." value={tempInput} onChange={e => setTempInput(e.target.value)} onKeyDown={handleInputSubmit} />
           )}
 
           {Object.entries(notebooks).map(([nbId, nbData]) => {
             const nbName = Object.keys(nbData)[0];
-            const isNbOpen = activeNbId === nbId;
+            const isEditingNb = inputTarget.id === nbId && inputTarget.mode === 'rename';
+            const isNbOpen = openNotebooks.has(nbId);
 
             return (
-              <div key={nbId} className="group/nb">
+              <div key={nbId} className="group">
                 <div 
-                  onClick={() => setActiveNbId(isNbOpen ? null : nbId)}
-                  className={`p-4 rounded-2xl cursor-pointer transition-all flex justify-between items-center ${isNbOpen ? 'bg-white border border-[#f1f1f1] shadow-sm' : 'hover:bg-white/60'}`}
+                  onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.pageX, y: e.pageY, type: 'nb', id: nbId }); }}
+                  onClick={() => toggleNotebook(nbId)}
+                  className={`p-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all ${isNbOpen ? 'bg-[#f8f8f8] ring-1 ring-black/5' : 'hover:bg-gray-50'}`}
                 >
-                  <span className="text-xs font-black uppercase">{nbName}</span>
-                  <div className="flex items-center gap-2">
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); setActiveNbId(nbId); setInputTarget({ type: 'sec', id: nbId }); }}
-                      className="opacity-0 group-hover/nb:opacity-100 text-[9px] font-bold bg-black text-white px-2 py-1 rounded-md"
-                    >
-                      + SEC
-                    </button>
-                    <button onClick={(e) => handleDelete(e, 'nb', nbId)} className="opacity-0 group-hover/nb:opacity-40 hover:!opacity-100">✕</button>
-                  </div>
+                  {isEditingNb ? (
+                    <input autoFocus className="bg-transparent font-bold uppercase text-xs outline-none w-full" value={tempInput} onChange={e => setTempInput(e.target.value)} onKeyDown={handleInputSubmit} />
+                  ) : (
+                    <span className="text-xs font-black uppercase tracking-tight flex items-center gap-2">
+                       <span className={`transition-transform duration-200 ${isNbOpen ? 'rotate-90' : ''}`}>▶</span> {nbName}
+                    </span>
+                  )}
                 </div>
 
                 {isNbOpen && (
-                  <div className="ml-4 pl-4 border-l-2 border-[#f1f1f1] mt-2 space-y-4">
-                    {/* Create Section Input */}
-                    {inputTarget.type === 'sec' && inputTarget.id === nbId && (
-                      <input 
-                        autoFocus
-                        className="w-full bg-white border border-black/20 rounded-lg p-2 text-[10px] font-bold outline-none"
-                        placeholder="SECTION NAME..."
-                        value={tempInput}
-                        onChange={(e) => setTempInput(e.target.value)}
-                        onKeyDown={(e) => handleCreate(e, 'sec', nbId)}
-                        onBlur={() => setInputTarget({ type: null, id: null })}
-                      />
+                  <div className="ml-5 pl-3 border-l-2 border-gray-100 mt-1 space-y-2">
+                    {inputTarget.type === 'sec' && inputTarget.parentNbId === nbId && inputTarget.mode === 'create' && (
+                      <input autoFocus className="w-full p-2 border border-black rounded-lg text-[10px] font-bold" placeholder="SECTION..." value={tempInput} onChange={e => setTempInput(e.target.value)} onKeyDown={handleInputSubmit} />
                     )}
 
-                    {Object.entries(nbData[nbName].sections).map(([secId, secData]) => (
-                      <div key={secId} className="group/sec space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span 
-                            onClick={() => setActiveSecId(activeSecId === secId ? null : secId)}
-                            className={`text-[10px] font-extrabold uppercase tracking-widest cursor-pointer ${activeSecId === secId ? 'text-black' : 'text-gray-400 hover:text-black'}`}
+                    {Object.entries(nbData[nbName].sections).map(([secId, secData]) => {
+                      const isEditingSec = inputTarget.id === secId && inputTarget.mode === 'rename';
+                      const isSecOpen = openSections.has(secId);
+                      return (
+                        <div key={secId} onDragOver={e => e.preventDefault()} onDrop={e => onDrop(e, { type: 'sec', id: secId, parentNbId: nbId })}>
+                          <div 
+                            onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.pageX, y: e.pageY, type: 'sec', id: secId, parentNbId: nbId }); }}
+                            onClick={() => toggleSection(secId)}
+                            className={`text-[10px] font-black uppercase tracking-widest cursor-pointer hover:text-black mb-1 p-2 rounded-lg transition-colors ${isSecOpen ? 'text-black bg-gray-50' : 'text-gray-400'}`}
                           >
-                            # {secData.sectionname}
-                          </span>
-                          <div className="flex gap-2">
-                            <button 
-                              onClick={() => { setActiveSecId(secId); setInputTarget({ type: 'pg', id: secId }); }}
-                              className="opacity-0 group-hover/sec:opacity-100 text-[8px] font-bold border border-black px-1.5 py-0.5 rounded"
-                            >
-                              + PG
-                            </button>
-                            <button onClick={(e) => handleDelete(e, 'sec', nbId, secId)} className="opacity-0 group-hover/sec:opacity-40 text-[8px]">✕</button>
+                            {isEditingSec ? (
+                               <input autoFocus className="bg-transparent border-b border-black outline-none w-full" value={tempInput} onChange={e => setTempInput(e.target.value)} onKeyDown={handleInputSubmit} />
+                            ) : `# ${secData.sectionname}`}
                           </div>
+
+                          {isSecOpen && (
+                            <div className="space-y-1 ml-2">
+                              {inputTarget.type === 'pg' && inputTarget.parentSecId === secId && inputTarget.mode === 'create' && (
+                                <input autoFocus className="w-full p-2 border border-gray-200 rounded text-[10px]" placeholder="PAGE NAME..." value={tempInput} onChange={e => setTempInput(e.target.value)} onKeyDown={handleInputSubmit} />
+                              )}
+                              {Object.entries(secData.pages).map(([pgId, pgData]) => {
+                                const isEditingPg = inputTarget.id === pgId && inputTarget.mode === 'rename';
+                                return (
+                                  <div 
+                                    key={pgId} draggable onDragStart={e => e.dataTransfer.setData("item", JSON.stringify({ type: 'pg', id: pgId, parentNbId: nbId, parentSecId: secId }))}
+                                    onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.pageX, y: e.pageY, type: 'pg', id: pgId, parentNbId: nbId, parentSecId: secId }); }}
+                                    onClick={() => setActivePagePath({ nbId, secId, pgId })}
+                                    className={`p-3 rounded-xl text-[11px] font-semibold cursor-pointer transition-all ${activePagePath?.pgId === pgId ? 'bg-black text-white shadow-md scale-[1.02]' : 'bg-gray-50 hover:bg-gray-100 text-gray-500'}`}
+                                  >
+                                    {isEditingPg ? (
+                                      <input autoFocus className="bg-transparent outline-none w-full text-white" value={tempInput} onChange={e => setTempInput(e.target.value)} onKeyDown={handleInputSubmit} />
+                                    ) : pgData.pagename}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
-                        
-                        {activeSecId === secId && (
-                          <div className="ml-2 space-y-1">
-                            {/* Create Page Input */}
-                            {inputTarget.type === 'pg' && inputTarget.id === secId && (
-                              <input 
-                                autoFocus
-                                className="w-full bg-white border border-black/10 rounded-lg p-2 text-[10px] outline-none mb-2"
-                                placeholder="PAGE NAME..."
-                                value={tempInput}
-                                onChange={(e) => setTempInput(e.target.value)}
-                                onKeyDown={(e) => handleCreate(e, 'pg', nbId, secId)}
-                                onBlur={() => setInputTarget({ type: null, id: null })}
-                              />
-                            )}
-                            {Object.entries(secData.pages).map(([pgId, pgData]) => (
-                              <div 
-                                key={pgId}
-                                onClick={() => setActivePagePath({ nbId, secId, pgId })}
-                                className={`group/pg p-3 rounded-xl text-[11px] font-semibold cursor-pointer transition-all flex justify-between items-center ${activePagePath?.pgId === pgId ? 'bg-black text-white shadow-md' : 'bg-white/40 hover:bg-white text-gray-500 hover:text-black'}`}
-                              >
-                                <span>{pgData.pagename}</span>
-                                <button onClick={(e) => handleDelete(e, 'pg', nbId, secId, pgId)} className="opacity-0 group-hover/pg:opacity-50 text-[10px]">✕</button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -196,49 +261,48 @@ const ExecutiveNotebook = () => {
         </div>
       </div>
 
-      {/* EDITOR AREA */}
-      <div className="flex-grow bg-[#f9f9f9] border border-[#f1f1f1] rounded-[32px] flex flex-col min-w-0 transition-all overflow-hidden">
+      {/* EDITOR */}
+      <div className="flex-1 bg-white border border-[#ececec] rounded-[40px] shadow-inner flex flex-col overflow-hidden">
         {currentPage ? (
           <>
-            <div className="h-24 flex items-center justify-between px-10 border-b border-[#f1f1f1] bg-[#f9f9f9]">
-              <div>
-                <span className="text-[10px] font-extrabold text-[#a1a1aa] uppercase tracking-widest">Active dossier</span>
-                <h1 className="text-3xl font-black tracking-tighter uppercase">{currentPage.pagename}</h1>
-              </div>
-              <div className="flex items-center gap-4">
-                {isSaving && <div className="text-[9px] font-black text-green-500 uppercase">Saving...</div>}
-                <button 
-                  onClick={() => setIsPreview(!isPreview)}
-                  className="px-8 py-3 bg-black text-white rounded-full text-[10px] font-extrabold uppercase tracking-widest hover:scale-105 transition-transform"
-                >
-                  {isPreview ? 'Edit' : 'Preview'}
-                </button>
-              </div>
+            <div className="p-10 border-b flex justify-between items-center bg-gray-50/30">
+              <h1 className="text-3xl font-black uppercase italic tracking-tighter">{currentPage.pagename}</h1>
+              <button onClick={() => setIsPreview(!isPreview)} className="px-8 py-3 bg-black text-white rounded-full text-xs font-bold uppercase hover:invert transition-all">{isPreview ? 'Edit' : 'Preview'}</button>
             </div>
-
-            <div className="flex-1 m-4 rounded-[24px] bg-white border border-[#f1f1f1] overflow-hidden flex flex-col">
+            <div className="flex-1 p-2">
               {isPreview ? (
-                <div className="p-16 overflow-auto custom-scrollbar">
-                  <h1 className="text-5xl font-black tracking-tighter uppercase mb-10 border-b-[6px] border-black pb-4">{currentPage.pagename}</h1>
-                  <div className="text-xl font-medium leading-relaxed text-gray-700 whitespace-pre-wrap">{currentPage.content || "NO DATA."}</div>
-                </div>
+                <div className="p-12 text-xl font-medium leading-relaxed whitespace-pre-wrap">{currentPage.content || "VOID."}</div>
               ) : (
                 <textarea 
-                  className="w-full h-full p-12 outline-none resize-none text-2xl font-medium text-black placeholder:text-gray-100"
-                  value={currentPage.content}
-                  onChange={(e) => updateContent(e.target.value)}
-                  placeholder="Initiate acquisition..."
+                  className="w-full h-full p-12 outline-none resize-none text-2xl font-medium bg-transparent" 
+                  value={currentPage.content} 
+                  onChange={e => {
+                    const updated = { ...notebooks };
+                    updated[activePagePath.nbId][Object.keys(updated[activePagePath.nbId])[0]].sections[activePagePath.secId].pages[activePagePath.pgId].content = e.target.value;
+                    setNotebooks(updated);
+                  }}
+                  placeholder="Capture intelligence..."
                 />
               )}
             </div>
           </>
         ) : (
-          <div className="m-auto text-center opacity-10 select-none">
-             <h1 className="text-[10rem] font-black tracking-tighter leading-none">VOID.</h1>
-             <p className="text-xs font-extrabold uppercase tracking-[0.4em]">Awaiting Selection</p>
+          <div className="m-auto text-center opacity-[0.05] pointer-events-none select-none">
+            <h1 className="text-[12rem] font-black italic">OS</h1>
           </div>
         )}
       </div>
+
+      {/* CONTEXT MENU */}
+      {contextMenu && (
+        <div className="fixed bg-white border border-gray-100 shadow-2xl rounded-2xl py-3 w-56 z-50 text-[11px] font-black uppercase tracking-widest overflow-hidden" style={{ top: contextMenu.y, left: contextMenu.x }}>
+          <div className="px-5 py-2 hover:bg-black hover:text-white cursor-pointer" onClick={() => { setInputTarget({ type: contextMenu.type === 'nb' ? 'sec' : 'pg', id: contextMenu.id, mode: 'create', parentNbId: contextMenu.type === 'nb' ? contextMenu.id : contextMenu.parentNbId, parentSecId: contextMenu.id }); setTempInput(''); }}>Add Child</div>
+          <div className="px-5 py-2 hover:bg-black hover:text-white cursor-pointer" onClick={() => { setInputTarget({ ...contextMenu, mode: 'rename' }); setTempInput(''); }}>Rename</div>
+          <div className="px-5 py-2 border-t mt-2 hover:bg-black hover:text-white cursor-pointer" onClick={() => handleCopy(contextMenu)}>Copy</div>
+          <div className="px-5 py-2 hover:bg-black hover:text-white cursor-pointer" onClick={() => handlePaste(contextMenu)}>Paste</div>
+          <div className="px-5 py-2 border-t mt-2 text-red-500 hover:bg-red-500 hover:text-white cursor-pointer" onClick={() => executeDelete(contextMenu)}>Delete</div>
+        </div>
+      )}
     </div>
   );
 };
