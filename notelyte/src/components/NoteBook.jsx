@@ -91,66 +91,27 @@ const ExecutiveNotebook = () => {
     if (activePagePath?.pgId === id) setActivePagePath(null);
     setNotebooks(updated);
   };
-const handleCopy = (menu) => {
-  const updated = { ...notebooks };
 
-  if (menu.type === "sec") {
-    const nbKey = Object.keys(updated[menu.parentNbId])[0];
-    const section = updated[menu.parentNbId][nbKey].sections[menu.id];
+  const handleCopy = (menu) => {
+    const nbKey = Object.keys(notebooks[menu.parentNbId || menu.id])[0];
+    let data;
+    if (menu.type === 'sec') data = JSON.parse(JSON.stringify(notebooks[menu.parentNbId][nbKey].sections[menu.id]));
+    if (menu.type === 'pg') data = JSON.parse(JSON.stringify(notebooks[menu.parentNbId][nbKey].sections[menu.parentSecId].pages[menu.id]));
+    setClipboard({ type: menu.type, data });
+  };
 
-    setClipboard({
-      type: "sec",
-      payload: JSON.parse(JSON.stringify(section)),
-    });
-  }
-
-  if (menu.type === "pg") {
-    const nbKey = Object.keys(updated[menu.parentNbId])[0];
-    const page =
-      updated[menu.parentNbId][nbKey].sections[menu.parentSecId].pages[menu.id];
-
-    setClipboard({
-      type: "pg",
-      payload: JSON.parse(JSON.stringify(page)),
-    });
-  }
-};
-
-const handlePaste = (menu) => {
-  if (!clipboard) return;
-
-  const updated = { ...notebooks };
-  const newId = `COPY_${Date.now()}`;
-
-  // Paste SECTION → NOTEBOOK
-  if (clipboard.type === "sec" && menu.type === "nb") {
-    const nbKey = Object.keys(updated[menu.id])[0];
-
-    updated[menu.id][nbKey].sections[newId] = {
-      ...clipboard.payload,
-      sectionname: clipboard.payload.sectionname + " (Copy)",
-    };
-
+  const handlePaste = (menu) => {
+    if (!clipboard) return;
+    const updated = { ...notebooks };
+    const nbKey = Object.keys(updated[menu.parentNbId || menu.id])[0];
+    const newId = `COPY_${Date.now()}`;
+    if (clipboard.type === 'sec' && menu.type === 'nb') {
+      updated[menu.id][nbKey].sections[newId] = { ...clipboard.data, sectionname: clipboard.data.sectionname + " (Copy)" };
+    } else if (clipboard.type === 'pg' && menu.type === 'sec') {
+      updated[menu.parentNbId][nbKey].sections[menu.id].pages[newId] = { ...clipboard.data, pagename: clipboard.data.pagename + " (Copy)" };
+    }
     setNotebooks(updated);
-    toggleNotebook(menu.id);
-    return;
-  }
-
-  // Paste PAGE → SECTION
-  if (clipboard.type === "pg" && menu.type === "sec") {
-    const nbKey = Object.keys(updated[menu.parentNbId])[0];
-
-    updated[menu.parentNbId][nbKey].sections[menu.id].pages[newId] = {
-      ...clipboard.payload,
-      pagename: clipboard.payload.pagename + " (Copy)",
-    };
-
-    setNotebooks(updated);
-    toggleSection(menu.id);
-    return;
-  }
-};
-
+  };
 
   const onDrop = (e, target) => {
     e.preventDefault();
